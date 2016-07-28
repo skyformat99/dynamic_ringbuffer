@@ -1038,6 +1038,7 @@ namespace
         void swap (dynamic_ringbuffer & other)
             noexcept (
                 not alloc_propagate_on_container_swap::value ||
+                // TODO: replace this with a portable custom implementation
                 std::__is_nothrow_swappable <allocator_type>::value
             )
         {
