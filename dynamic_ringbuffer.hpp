@@ -109,6 +109,7 @@ namespace
      *
      *  Member Types
      *  ------------
+     *  - allocator_type:  Alloc;
      *  - value_type:      T;
      *  - size_type:       std::size_t;
      *  - difference_type: std::ptrdiff_t;
@@ -121,6 +122,64 @@ namespace
      *  - const_iterator:         models RandomAccessIterator
      *  - reverse_iterator:       std::reverse_iterator <iterator>;
      *  - const_reverse_iterator: std::reverse_iterator <const_iterator>;
+     *
+     *  Constructors
+     *  ------------
+     *  dynamic_ringbuffer (void):
+     *      - default constructs an empty buffer; default constructs allocator;
+     *        defaults resize and overwrite policies
+     *      - nothrow if Alloc is nothrow default constructible
+     *
+     *  dynamic_ringbuffer (allocator_type const &):
+     *      - default constructs an empty buffer; copy constructs allocator;
+     *        defaults resize and overwrite policies
+     *
+     *  dynamic_ringbuffer (size_type,
+     *                      enum resize_policy = default,
+     *                      enum overwrite_policy = default):
+     *      - constructs a buffer with capacity sufficienct to hold at least
+     *        the provided size buffered elements; sets resize and overwrite
+     *        policies
+     *
+     *  dynamic_ringbuffer (size_type,
+     *                      allocator_type const &,
+     *                      enum resize_policy = default,
+     *                      enum overwrite_policy = default):
+     *      - constructs a buffer with capacity sufficienct to hold at least
+     *        the provided size buffered elements; copy constructs allocator;
+     *        sets resize and overwrite policies
+     *
+     *  dynamic_ringbuffer (dynamic_ringbuffer const &):
+     *      - copy constructs buffer; copy constructs allocator; copies resize
+     *        and overwrite policies
+     *
+     *  dynamic_ringbuffer (dynamic_ringbuffer const &, allocator_type const &):
+     *      - copy constructs buffer; copy constructs allocator; copies resize
+     *        and overwrite policies
+     *
+     *  dynamic_ringbuffer (dynamic_ringbuffer &&):
+     *      - move constructs buffer; move constructs allocator; copies resize
+     *        and overwrite policies
+     *      - nothrow if Alloc is nothrow move constructible
+     *
+     *  dynamic_ringbuffer (dynamic_ringbuffer &&, allocator_type const &):
+     *      - move constructs buffer; copy constructs allocator; copies resize
+     *        and overwrite policies
+     *
+     *  Assignment Operators
+     *  --------------------
+     *  operator= (dynamic_ringbuffer const &):
+     *      - copy assigns buffer; copy assigns allocator if Alloc is propagate
+     *      on container copy assignment; copies resize and overwrite policies
+     *
+     *  operator= (dynamic_ringbuffer &&):
+     *      - move assigns buffer; move assigns allocator if Alloc is propagate
+     *      on container move assignment; copies resize and overwrite policies
+     *      - nothrow if T is nothrow destructible and either:
+     *          i.  Alloc is propagate on container move assignment and Alloc is
+     *              nothrow move assignable;
+     *          ii. or Alloc is not propagate on container move assignment and
+     *              Alloc is always equal
      *
      *  Member Functions
      *  ----------------
@@ -135,6 +194,8 @@ namespace
      *              currently allocated storage
      *  - resize:   changes the number of elements stored
      *  - shrink_to_fit: reduces memory usage by freeing unused memory
+     *
+     *  - get_allocator: returns the allocator associated with the container
      *
      *  - set_resize_policy: sets the resize policy for the container
      *  - get_resize_policy: returns the resize policy for the container
@@ -181,9 +242,10 @@ namespace
             overwrite
         };
 
+        using allocator_type = Alloc;
+
     private:
         /* allocator-relevant types derived from template parameter Alloc */
-        using allocator_type        = Alloc;
         using alloc_traits          = std::allocator_traits <allocator_type>;
         using alloc_value_type      = typename alloc_traits::value_type;
         using alloc_pointer         = typename alloc_traits::pointer;
@@ -231,10 +293,13 @@ namespace
 
         static std::size_t bump_up (std::size_t n) noexcept
         {
+            static constexpr std::size_t max_size {
+                std::numeric_limits <std::size_t>::max () / sizeof (T)
+            };
+
             static constexpr std::size_t threshold {
                 static_cast <std::size_t> (
-                    std::numeric_limits <std::size_t>::max () /
-                    buffer_growth_rate
+                    max_size / buffer_growth_rate
                 )
             };
 
@@ -242,7 +307,7 @@ namespace
 
             while (r < n) {
                 if (r > threshold) {
-                    r = std::numeric_limits <std::size_t>::max ();
+                    r = max_size;
                     break;
                 } else {
                     r *= buffer_growth_rate;
@@ -258,15 +323,23 @@ namespace
         using backing_const_reference = memblock <T> const &;
 
         allocator_type _alloc;
-        memblock <T> * _buffer;
-        std::size_t _buffered;
-        std::size_t _capacity;
 
-        backing_pointer _first;
-        backing_pointer _last;
-
+        /* policies determining behavior when capacity == 0 */
         enum resize_policy _rspolicy;
         enum overwrite_policy _owpolicy;
+
+        /* number of buffered elements */
+        std::size_t _buffered;
+
+        /* maximum currently allocated capacity */
+        std::size_t _capacity;
+
+        /* our actual buffer */
+        memblock <T> * _buffer;
+
+        /* _first and _last point to the first and last buffer positions */
+        backing_pointer _first;
+        backing_pointer _last;
 
         template <typename U>
         class iterator_impl;
@@ -554,6 +627,47 @@ namespace
             }
         };
 
+        void set_buffer_pointers (void) noexcept
+        {
+            this->_first = &this->_buffer [0];
+            this->_last = &this->_buffer [
+                this->_capacity ? this->_capacity - 1 : 0
+            ];
+        }
+
+        void set_buffer_iterators (void) noexcept
+        {
+            this->_head = iterator {
+                reinterpret_cast <pointer> (this->_buffer),
+                reinterpret_cast <pointer> (this->_first),
+                reinterpret_cast <pointer> (this->_last),
+                reinterpret_cast <pointer> (this->_first),
+                reinterpret_cast <pointer> (this->_last)
+            };
+            this->_tail = iterator {
+                reinterpret_cast <pointer> (this->_buffer),
+                reinterpret_cast <pointer> (this->_first),
+                reinterpret_cast <pointer> (this->_last),
+                reinterpret_cast <pointer> (this->_first),
+                reinterpret_cast <pointer> (this->_last)
+            };
+        }
+
+        void reset (void) noexcept
+        {
+            this->_buffered = 0;
+            this->_capacity = 0;
+            this->_buffer = nullptr;
+            this->_first = nullptr;
+            this->_last = nullptr;
+            this->_head = iterator {
+                nullptr, nullptr, nullptr, nullptr, nullptr
+            };
+            this->_tail = iterator {
+                nullptr, nullptr, nullptr, nullptr, nullptr
+            };
+        }
+
     public:
         using value_type      = T;
         using size_type       = std::size_t;
@@ -571,13 +685,13 @@ namespace
         dynamic_ringbuffer (void)
             noexcept (alloc_is_nothrow_default_constructible::value)
             : _alloc    {}
-            , _buffer   {nullptr}
-            , _buffered {0}
-            , _capacity {0}
-            , _first    {nullptr}
-            , _last     {nullptr}
             , _rspolicy {resize_policy::resize}
             , _owpolicy {overwrite_policy::no_overwrite}
+            , _buffered {0}
+            , _capacity {0}
+            , _buffer   {nullptr}
+            , _first    {nullptr}
+            , _last     {nullptr}
             , _head {}
             , _tail {}
         {}
@@ -585,47 +699,31 @@ namespace
         explicit dynamic_ringbuffer (allocator_type const & alloc)
             noexcept (alloc_is_nothrow_copy_constructible::value)
             : _alloc    {alloc}
-            , _buffer   {nullptr}
-            , _buffered {0}
-            , _capacity {0}
-            , _first    {nullptr}
-            , _last     {nullptr}
             , _rspolicy {resize_policy::resize}
             , _owpolicy {overwrite_policy::no_overwrite}
+            , _buffered {0}
+            , _capacity {0}
+            , _buffer   {nullptr}
+            , _first    {nullptr}
+            , _last     {nullptr}
             , _head  {}
             , _tail  {}
         {}
 
         dynamic_ringbuffer (
             size_type count,
-            enum resize_policy rspol = resize_policy {},
-            enum overwrite_policy owpol = overwrite_policy {}
+            enum resize_policy rspol = resize_policy::resize,
+            enum overwrite_policy owpol = overwrite_policy::no_overwrite
         )
             : _alloc    {}
-            , _buffer   {alloc_traits::allocate (_alloc, bump_up (count))}
-            , _buffered {0}
-            , _capacity {bump_up (count)}
-            , _first    {&_buffer [0]}
-            , _last     {&_buffer [_capacity - 1]}
             , _rspolicy {rspol}
             , _owpolicy {owpol}
+            , _buffered {0}
+            , _capacity {bump_up (count)}
+            , _buffer   {alloc_traits::allocate (_alloc, _capacity)}
         {
-            this->_first = &this->_buffer [0];
-            this->_last = &this->_buffer [this->_capacity];
-            this->_head = iterator {
-                reinterpret_cast <pointer> (this->_buffer),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last)
-            };
-            this->_tail = iterator {
-                reinterpret_cast <pointer> (this->_buffer),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last)
-            };
+            this->set_buffer_pointers ();
+            this->set_buffer_iterators ();
         }
 
         dynamic_ringbuffer (
@@ -635,30 +733,14 @@ namespace
             enum overwrite_policy owpol = overwrite_policy {}
         )
             : _alloc    {alloc}
-            , _buffer   {alloc_traits::allocate (_alloc, bump_up (count))}
-            , _buffered {0}
-            , _capacity {bump_up (count)}
-            , _first    {&_buffer [0]}
-            , _last     {&_buffer [_capacity - 1]}
             , _rspolicy {rspol}
             , _owpolicy {owpol}
+            , _buffered {0}
+            , _capacity {bump_up (count)}
+            , _buffer   {alloc_traits::allocate (_alloc, _capacity)}
         {
-            this->_first = &this->_buffer [0];
-            this->_last = &this->_buffer [this->_capacity];
-            this->_head = iterator {
-                reinterpret_cast <pointer> (this->_buffer),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last)
-            };
-            this->_tail = iterator {
-                reinterpret_cast <pointer> (this->_buffer),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last)
-            };
+            this->set_buffer_pointers ();
+            this->set_buffer_iterators ();
         }
 
         dynamic_ringbuffer (dynamic_ringbuffer const & other)
@@ -667,32 +749,14 @@ namespace
                     other._alloc
                 )
             }
-            , _buffer   {alloc_traits::allocate (_alloc, other._capacity)}
-            , _buffered {other._buffered}
-            , _capacity {other._capacity}
-            , _first    {&_buffer [0]}
-            , _last     {&_buffer [_capacity - 1]}
             , _rspolicy {other._rspolicy}
             , _owpolicy {other._owpolicy}
+            , _buffered {other._buffered}
+            , _capacity {other._capacity}
+            , _buffer   {alloc_traits::allocate (_alloc, _capacity)}
         {
-            this->_first = &this->_buffer [0];
-            this->_last = &this->_buffer [
-                this->_capacity ? this->_capacity - 1 : 0
-            ];
-            this->_head = iterator {
-                reinterpret_cast <pointer> (this->_buffer),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last)
-            };
-            this->_tail = iterator {
-                reinterpret_cast <pointer> (this->_buffer),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last)
-            };
+            this->set_buffer_pointers ();
+            this->set_buffer_iterators ();
 
             auto ti {this->_tail};
             auto oi {other.cbegin ()};
@@ -713,32 +777,14 @@ namespace
             dynamic_ringbuffer const & other, allocator_type const & alloc
         )
             : _alloc    {alloc}
-            , _buffer   {alloc_traits::allocate (_alloc, other._capacity)}
-            , _buffered {other._buffered}
-            , _capacity {other._capacity}
-            , _first    {&_buffer [0]}
-            , _last     {&_buffer [_capacity - 1]}
             , _rspolicy {other._rspolicy}
             , _owpolicy {other._owpolicy}
+            , _buffered {other._buffered}
+            , _capacity {other._capacity}
+            , _buffer   {alloc_traits::allocate (_alloc, _capacity)}
         {
-            this->_first = &this->_buffer [0];
-            this->_last = &this->_buffer [
-                this->_capacity ? this->_capacity - 1 : 0
-            ];
-            this->_head = iterator {
-                reinterpret_cast <pointer> (this->_buffer),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last)
-            };
-            this->_tail = iterator {
-                reinterpret_cast <pointer> (this->_buffer),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last)
-            };
+            this->set_buffer_pointers ();
+            this->set_buffer_iterators ();
 
             auto ti {this->_tail};
             auto oi {other.cbegin ()};
@@ -758,57 +804,39 @@ namespace
         dynamic_ringbuffer (dynamic_ringbuffer && other)
             noexcept (alloc_is_nothrow_move_constructible::value)
             : _alloc    {std::move (other._alloc)}
-            , _buffer   {other._buffer}
-            , _buffered {other._buffered}
-            , _capacity {other._capacity}
-            , _first    {&_buffer [0]}
-            , _last     {&_buffer [_capacity - 1]}
             , _rspolicy {other._rspolicy}
             , _owpolicy {other._owpolicy}
-            , _head  {other._head}
-            , _tail  {other._tail}
+            , _buffered {other._buffered}
+            , _capacity {other._capacity}
+            , _buffer   {other._buffer}
         {
-            other._buffer = nullptr;
+            this->set_buffer_pointers ();
+            this->set_buffer_iterators ();
+
+            other.reset ();
         }
 
         dynamic_ringbuffer (
             dynamic_ringbuffer && other, allocator_type const & alloc
         )
             : _alloc    {alloc}
-            , _buffer   {nullptr}
-            , _buffered {other._buffered}
-            , _capacity {other._capacity}
             , _rspolicy {other._rspolicy}
             , _owpolicy {other._owpolicy}
+            , _buffered {other._buffered}
+            , _capacity {other._capacity}
         {
-            if (alloc == other._alloc) {
+            if (this->_alloc == other._alloc) {
                 this->_buffer = other._buffer;
                 this->_head = other._head;
                 this->_tail = other._tail;
-                other._buffer = nullptr;
+                this->set_buffer_iterators ();
             } else {
                 this->_buffer = alloc_traits::allocate (
                     this->_alloc, this->_capacity
                 );
 
-                this->_first = &this->_buffer [0];
-                this->_last = &this->_buffer [
-                    this->_capacity ? this->_capacity - 1 : 0
-                ];
-                this->_head = iterator {
-                    reinterpret_cast <pointer> (this->_buffer),
-                    reinterpret_cast <pointer> (this->_first),
-                    reinterpret_cast <pointer> (this->_last),
-                    reinterpret_cast <pointer> (this->_first),
-                    reinterpret_cast <pointer> (this->_last)
-                };
-                this->_tail = iterator {
-                    reinterpret_cast <pointer> (this->_buffer),
-                    reinterpret_cast <pointer> (this->_first),
-                    reinterpret_cast <pointer> (this->_last),
-                    reinterpret_cast <pointer> (this->_first),
-                    reinterpret_cast <pointer> (this->_last)
-                };
+                this->set_buffer_pointers ();
+                this->set_buffer_iterators ();
 
                 auto ti {this->_tail};
                 auto oi {other.cbegin ()};
@@ -823,7 +851,10 @@ namespace
                 }
 
                 this->_tail += this->_buffered;
+                other.clear ();
             }
+
+            other.reset ();
         }
 
         dynamic_ringbuffer & operator= (dynamic_ringbuffer const & other)
@@ -839,8 +870,6 @@ namespace
                         this->_buffer,
                         this->_capacity
                     );
-
-                    this->_buffer = nullptr;
                 }
 
                 this->_alloc = other._alloc;
@@ -849,27 +878,24 @@ namespace
                     this->_alloc, this->_capacity
                 );
             } else {
-                this->_capacity = other._capacity;
+                if (this->_capacity != other._capacity) {
+                    if (this->_buffer != nullptr) {
+                        alloc_traits::deallocate (
+                            this->_alloc,
+                            this->_buffer,
+                            this->_capacity
+                        );
+                    }
+
+                    this->_capacity = other._capacity;
+                    this->_buffer = alloc_traits::allocate (
+                        this->_alloc, this->_capacity
+                    );
+                }
             }
 
-            this->_first = &this->_buffer [0];
-            this->_last = &this->_buffer [
-                this->_capacity ? this->_capacity - 1 : 0
-            ];
-            this->_head = iterator {
-                reinterpret_cast <pointer> (this->_buffer),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last)
-            };
-            this->_tail = iterator {
-                reinterpret_cast <pointer> (this->_buffer),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last),
-                reinterpret_cast <pointer> (this->_first),
-                reinterpret_cast <pointer> (this->_last)
-            };
+            this->set_buffer_pointers ();
+            this->set_buffer_iterators ();
 
             auto oi {other.cbegin ()};
             auto ob {other._buffered};
@@ -895,8 +921,12 @@ namespace
         dynamic_ringbuffer & operator= (dynamic_ringbuffer && other)
             noexcept (
                 std::is_nothrow_destructible <T>::value &&
-                (alloc_propagate_on_container_move_assignment::value ||
-                 alloc_is_nothrow_move_assignable::value)
+                (
+                    (alloc_propagate_on_container_move_assignment::value &&
+                     alloc_is_nothrow_move_assignable::value) ||
+                    (not alloc_propagate_on_container_move_assignment::value &&
+                     alloc_is_always_equal::value)
+                )
             )
         {
             this->clear ();
@@ -910,18 +940,14 @@ namespace
                         this->_buffer,
                         this->_capacity
                     );
-
-                    this->_buffer = nullptr;
                 }
 
                 this->_alloc = std::move (other._alloc);
-                this->_buffer = other._buffer;
                 this->_buffered = other._buffered;
                 this->_capacity = other._capacity;
-                this->_first = other._first;
-                this->_last = other._last;
-                this->_head = other._head;
-                this->_tail = other._tail;
+                this->_buffer = other._buffer;
+                this->set_buffer_pointers ();
+                this->set_buffer_iterators ();
             } else if (this->_alloc == other._alloc) {
                 if (this->_buffer != nullptr) {
                     alloc_traits::deallocate (
@@ -929,17 +955,13 @@ namespace
                         this->_buffer,
                         this->_capacity
                     );
-
-                    this->_buffer = nullptr;
                 }
 
-                this->_buffer = other._buffer;
                 this->_buffered = other._buffered;
                 this->_capacity = other._capacity;
-                this->_first = other._first;
-                this->_last = other._last;
-                this->_head = other._head;
-                this->_tail = other._tail;
+                this->_buffer = other._buffer;
+                this->set_buffer_pointers ();
+                this->set_buffer_iterators ();
             } else {
                 if (this->_capacity < other._buffered) {
                     if (this->_buffer != nullptr) {
@@ -954,22 +976,8 @@ namespace
                     this->_buffer = alloc_traits::allocate (
                         this->_alloc, this->_capacity
                     );
-                    this->_first = &this->_buffer [0];
-                    this->_last = &this->_buffer [this->_capacity - 1];
-                    this->_head = iterator {
-                        reinterpret_cast <pointer> (this->_buffer),
-                        reinterpret_cast <pointer> (this->_first),
-                        reinterpret_cast <pointer> (this->_last),
-                        reinterpret_cast <pointer> (this->_first),
-                        reinterpret_cast <pointer> (this->_last)
-                    };
-                    this->_tail = iterator {
-                        reinterpret_cast <pointer> (this->_buffer),
-                        reinterpret_cast <pointer> (this->_first),
-                        reinterpret_cast <pointer> (this->_last),
-                        reinterpret_cast <pointer> (this->_first),
-                        reinterpret_cast <pointer> (this->_last)
-                    };
+                    this->set_buffer_pointers ();
+                    this->set_buffer_iterators ();
                 }
 
                 auto oi {other.cbegin ()};
@@ -989,8 +997,14 @@ namespace
                     this->_buffered += 1;
                     this->_tail += 1;
                 }
+
+                other.clear ();
+                alloc_traits::deallocate (
+                    other._alloc, other._buffer, other._capacity
+                );
             }
 
+            other.reset ();
             return *this;
         }
 
@@ -1005,16 +1019,18 @@ namespace
         ~dynamic_ringbuffer (void)
             noexcept (std::is_nothrow_destructible <value_type>::value)
         {
-            if (std::is_destructible <T>::value) {
-                auto it {this->end () - 1};
+            if (this->_buffer) {
+                auto it {this->end ()};
 
                 while (_buffered > 0) {
-                    destruct (it.addressof ());
                     it -= 1;
                     _buffered -= 1;
+                    destruct (it.addressof ());
                 }
-            } else {
-                _buffered = 0;
+
+                alloc_traits::deallocate (
+                    this->_alloc, this->_buffer, this->_capacity
+                );
             }
         }
 
@@ -1039,6 +1055,12 @@ namespace
             std::swap (this->_last, other._last);
             std::swap (this->_head, other._head);
             std::swap (this->_tail, other._tail);
+        }
+
+        /* returns the allocator associated with the container */
+        allocator_type get_allocator (void) const
+        {
+            return _alloc;
         }
 
         /* checks whether the buffer is empty */
@@ -1089,7 +1111,9 @@ namespace
                     };
 
                     {
-                        auto insert_ptr {reinterpret_cast <pointer> (new_alloc)};
+                        auto insert_ptr {
+                            reinterpret_cast <pointer> (new_alloc)
+                        };
                         for (auto & e : *this) {
                             new (insert_ptr) value_type {std::move (e)};
                             insert_ptr += 1;
@@ -1106,22 +1130,8 @@ namespace
 
                     this->_capacity = cap;
                     this->_buffer = new_alloc;
-                    this->_first = &this->_buffer [0];
-                    this->_last = &this->_buffer [this->_capacity - 1];
-                    this->_head = iterator {
-                        reinterpret_cast <pointer> (this->_buffer),
-                        reinterpret_cast <pointer> (this->_first),
-                        reinterpret_cast <pointer> (this->_last),
-                        reinterpret_cast <pointer> (this->_first),
-                        reinterpret_cast <pointer> (this->_last)
-                    };
-                    this->_tail = iterator {
-                        reinterpret_cast <pointer> (this->_buffer),
-                        reinterpret_cast <pointer> (this->_first),
-                        reinterpret_cast <pointer> (this->_last),
-                        reinterpret_cast <pointer> (this->_first),
-                        reinterpret_cast <pointer> (this->_last)
-                    };
+                    this->set_buffer_pointers ();
+                    this->set_buffer_iterators ();
                 }
             }
         }
@@ -1174,7 +1184,7 @@ namespace
                 this->clear ();
             } else {
                 if (_capacity < count) {
-                    this->_resize (count);
+                    this->reserve (count);
                 }
 
                 if (_buffered <= count) {
@@ -1221,22 +1231,8 @@ namespace
 
                 this->_capacity = bu;
                 this->_buffer = new_alloc;
-                this->_first = &this->_buffer [0];
-                this->_last = &this->_buffer [this->_capacity - 1];
-                this->_head = iterator {
-                    reinterpret_cast <pointer> (this->_buffer),
-                    reinterpret_cast <pointer> (this->_first),
-                    reinterpret_cast <pointer> (this->_last),
-                    reinterpret_cast <pointer> (this->_first),
-                    reinterpret_cast <pointer> (this->_last)
-                };
-                this->_tail = iterator {
-                    reinterpret_cast <pointer> (this->_buffer),
-                    reinterpret_cast <pointer> (this->_first),
-                    reinterpret_cast <pointer> (this->_last),
-                    reinterpret_cast <pointer> (this->_first),
-                    reinterpret_cast <pointer> (this->_last)
-                };
+                this->set_buffer_pointers ();
+                this->set_buffer_iterators ();
             }
         }
 
@@ -1484,12 +1480,12 @@ namespace
 
         void push_back (value_type const & v)
         {
-            return this->push (v);
+            this->push (v);
         }
 
         void push_back (value_type && v)
         {
-            return this->push (std::move (v));
+            this->push (std::move (v));
         }
 
         /*
@@ -1533,7 +1529,7 @@ namespace
         template <typename ... Args>
         void emplace_back (Args && ... args)
         {
-            return this->emplace (std::forward <Args> (args)...);
+            this->emplace (std::forward <Args> (args)...);
         }
 
         /*
