@@ -1,6 +1,6 @@
 //
 // dsa is a utility library of data structures and algorithms built with C++11.
-// This file (ringbuffer.hpp) is part of the dsa project.
+// This file (dynamic_ringbuffer.hpp) is part of the dsa project.
 //
 // dynamic ringbuffer; a resizable, allocator-aware implementation of an
 // STL-style circular buffer for C++11 and later.
