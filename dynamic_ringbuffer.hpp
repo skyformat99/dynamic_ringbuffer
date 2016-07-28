@@ -672,13 +672,13 @@ namespace
         using value_type      = T;
         using size_type       = std::size_t;
         using difference_type = std::ptrdiff_t;
-        using pointer         = T *;
-        using const_pointer   = T const *;
-        using reference       = T &;
-        using const_reference = T const &;
+        using pointer         = value_type *;
+        using const_pointer   = value_type const *;
+        using reference       = value_type &;
+        using const_reference = value_type const &;
 
-        using iterator        = iterator_impl <T>;
-        using const_iterator  = iterator_impl <T const>;
+        using iterator        = iterator_impl <value_type>;
+        using const_iterator  = iterator_impl <value_type const>;
         using reverse_iterator       = std::reverse_iterator <iterator>;
         using const_reverse_iterator = std::reverse_iterator <const_iterator>;
 
@@ -764,7 +764,7 @@ namespace
 
             while (ob) {
                 auto const addr {ti.addressof ()};
-                new (addr) T {*oi};
+                new (addr) value_type {*oi};
                 ti += 1;
                 oi += 1;
                 ob -= 1;
@@ -792,7 +792,7 @@ namespace
 
             while (ob) {
                 auto const addr {ti.addressof ()};
-                new (addr) T {*oi};
+                new (addr) value_type {*oi};
                 ti += 1;
                 oi += 1;
                 ob -= 1;
@@ -844,7 +844,7 @@ namespace
 
                 while (ob) {
                     auto const addr {ti.addressof ()};
-                    new (addr) T {std::move (*oi)};
+                    new (addr) value_type {std::move (*oi)};
                     ti += 1;
                     oi += 1;
                     ob -= 1;
@@ -902,7 +902,7 @@ namespace
 
             while (ob) {
                 auto const addr {this->_tail.addressof ()};
-                new (addr) T {*oi};
+                new (addr) value_type {*oi};
                 oi += 1;
                 ob -= 1;
 
@@ -920,7 +920,7 @@ namespace
 
         dynamic_ringbuffer & operator= (dynamic_ringbuffer && other)
             noexcept (
-                std::is_nothrow_destructible <T>::value &&
+                std::is_nothrow_destructible <value_type>::value &&
                 (
                     (alloc_propagate_on_container_move_assignment::value &&
                      alloc_is_nothrow_move_assignable::value) ||
@@ -985,7 +985,7 @@ namespace
 
                 while (ob) {
                     auto const addr {this->_tail.addressof ()};
-                    new (addr) T {std::move (*oi)};
+                    new (addr) value_type {std::move (*oi)};
                     oi += 1;
                     ob -= 1;
 
@@ -1093,7 +1093,8 @@ namespace
         /* returns the maximum number of elements that can be buffered */
         constexpr std::size_t max_size (void) const noexcept
         {
-            return std::numeric_limits <std::size_t>::max () / sizeof (T);
+            return std::numeric_limits <std::size_t>::max () /
+                sizeof (value_type);
         }
 
         /* reserves storage large enough to store at least new_cap elements */
@@ -1156,7 +1157,7 @@ namespace
                 if (_buffered <= count) {
                     while (_buffered < count) {
                         auto const addr {_tail.addressof ()};
-                        new (addr) T {};
+                        new (addr) value_type {};
                         _tail += 1;
                         _buffered += 1;
                     }
@@ -1190,7 +1191,7 @@ namespace
                 if (_buffered <= count) {
                     while (_buffered < count) {
                         auto const addr {_tail.addressof ()};
-                        new (addr) T {value};
+                        new (addr) value_type {value};
                         _tail += 1;
                         _buffered += 1;
                     }
